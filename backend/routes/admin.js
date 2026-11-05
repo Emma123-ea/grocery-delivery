@@ -155,5 +155,47 @@ router.patch('/products/:id', (req, res) => {
 
   res.json(updated);
 });
+router.get('/branches', (req, res) => {
+  const branches = db
+    .prepare('SELECT id, name, address, phone, is_active FROM branches ORDER BY id')
+    .all();
+  res.json(branches);
+});
 
+router.patch('/branches/:id', (req, res) => {
+  const id = Number(req.params.id);
+  const branch = Number.isInteger(id)
+    ? db.prepare('SELECT * FROM branches WHERE id = ?').get(id)
+    : undefined;
+
+  if (!branch) {
+    return res.status(404).json({ error: 'Branch not found' });
+  }
+
+  const body = req.body || {};
+  const name = body.name !== undefined ? String(body.name).trim() : branch.name;
+  const address = body.address !== undefined ? String(body.address).trim() : branch.address;
+  const phone = body.phone !== undefined ? String(body.phone).trim() || null : branch.phone;
+
+  if (!name || name.length > 120) {
+    return res.status(400).json({ error: 'Enter a branch name of up to 120 characters' });
+  }
+  if (!address || address.length > 300) {
+    return res.status(400).json({ error: 'Enter an address of up to 300 characters' });
+  }
+  if (phone && phone.length > 30) {
+    return res.status(400).json({ error: 'Phone number is too long' });
+  }
+
+  db.prepare('UPDATE branches SET name = ?, address = ?, phone = ? WHERE id = ?').run(
+    name,
+    address,
+    phone,
+    id
+  );
+
+  res.json(
+    db.prepare('SELECT id, name, address, phone, is_active FROM branches WHERE id = ?').get(id)
+  );
+});
 module.exports = router;

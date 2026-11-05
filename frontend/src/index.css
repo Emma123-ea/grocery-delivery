@@ -572,3 +572,6 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+.branch-form .field {
+  width: 200px;
+}

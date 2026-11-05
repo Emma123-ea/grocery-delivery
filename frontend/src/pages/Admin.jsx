@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { useAuth } from '../useAuth'
 import AdminOrders from '../components/AdminOrders'
 import AdminProducts from '../components/AdminProducts'
+import AdminBranches from '../components/AdminBranches'
 
 export default function Admin() {
   const { user } = useAuth()
@@ -37,9 +38,20 @@ export default function Admin() {
         >
           Products
         </button>
+        <button
+          type="button"
+          role="tab"
+          className="tab"
+          aria-selected={tab === 'branches'}
+          onClick={() => setTab('branches')}
+        >
+          Branches
+        </button>
       </div>
 
-      {tab === 'orders' ? <AdminOrders /> : <AdminProducts />}
+      {tab === 'orders' && <AdminOrders />}
+      {tab === 'products' && <AdminProducts />}
+      {tab === 'branches' && <AdminBranches />}
     </div>
   )
 }
