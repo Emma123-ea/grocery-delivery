@@ -1,19 +1,15 @@
 import { useEffect, useState } from 'react'
-
-function formatPrice(pesewas) {
-  const cedis = (pesewas / 100).toLocaleString('en-GH', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-  return `GH₵ ${cedis}`
-}
+import { useCart } from '../useCart'
+import { formatPrice } from '../formatPrice'
 
 export default function Products() {
+  const { items, addItem } = useCart()
   const [branches, setBranches] = useState([])
   const [products, setProducts] = useState([])
   const [branchId, setBranchId] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notices, setNotices] = useState({})
 
   useEffect(() => {
     fetch('/api/branches')
@@ -49,6 +45,11 @@ export default function Products() {
     setBranchId(e.target.value)
   }
 
+  function handleAdd(product) {
+    const result = addItem(product)
+    setNotices((prev) => ({ ...prev, [product.id]: result.ok ? '' : result.error }))
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -73,17 +74,36 @@ export default function Products() {
       )}
 
       <ul className="product-grid">
-        {products.map((p) => (
-          <li key={p.id} className="product-card">
-            {p.category && <p className="product-category">{p.category}</p>}
-            <h2>{p.name}</h2>
-            {p.description && <p className="product-description">{p.description}</p>}
-            <p className="product-price">{formatPrice(p.price_pesewas)}</p>
-            <p className={p.stock_quantity > 0 ? 'stock in' : 'stock out'}>
-              {p.stock_quantity > 0 ? `${p.stock_quantity} in stock` : 'Out of stock'}
-            </p>
-          </li>
-        ))}
+        {products.map((p) => {
+          const inCart = items.find((i) => i.id === p.id)
+          const soldOut = p.stock_quantity <= 0
+
+          return (
+            <li key={p.id} className="product-card">
+              {p.category && <p className="product-category">{p.category}</p>}
+              <h2>{p.name}</h2>
+              {p.description && <p className="product-description">{p.description}</p>}
+              <p className="product-price">{formatPrice(p.price_pesewas)}</p>
+              <p className={soldOut ? 'stock out' : 'stock in'}>
+                {soldOut ? 'Out of stock' : `${p.stock_quantity} in stock`}
+              </p>
+
+              <div className="product-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleAdd(p)}
+                  disabled={soldOut}
+                >
+                  Add to cart
+                </button>
+              </div>
+
+              {inCart && <p className="in-cart">{inCart.quantity} in your cart</p>}
+              {notices[p.id] && <p className="card-notice">{notices[p.id]}</p>}
+            </li>
+          )
+        })}
       </ul>
     </div>
   )

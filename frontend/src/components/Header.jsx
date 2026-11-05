@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../useAuth'
+import { useCart } from '../useCart'
 
 export default function Header() {
   const { user, logout } = useAuth()
+  const { itemCount } = useCart()
 
   return (
     <header className="site-header">
@@ -11,6 +13,9 @@ export default function Header() {
           Grocery Delivery
         </Link>
         <nav className="nav">
+          <Link to="/cart" className="nav-link">
+            Cart{itemCount > 0 ? ` (${itemCount})` : ''}
+          </Link>
           {user ? (
             <>
               <span className="nav-user">{user.name}</span>

@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom'
 import Header from './components/Header'
 import Products from './pages/Products'
+import Cart from './pages/Cart'
 import Login from './pages/Login'
 import Register from './pages/Register'
 
@@ -11,6 +12,7 @@ export default function App() {
       <main className="page">
         <Routes>
           <Route path="/" element={<Products />} />
+          <Route path="/cart" element={<Cart />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="*" element={<p className="message">Page not found.</p>} />
