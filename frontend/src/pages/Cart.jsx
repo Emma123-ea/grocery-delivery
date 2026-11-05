@@ -62,9 +62,14 @@ export default function Cart() {
 
       <div className="cart-summary">
         <p className="cart-total">Total: {formatPrice(totalPesewas)}</p>
-        <button type="button" className="btn btn-secondary" onClick={clearCart}>
-          Clear cart
-        </button>
+               <div className="cart-actions">
+          <button type="button" className="btn btn-secondary" onClick={clearCart}>
+            Clear cart
+          </button>
+          <Link to="/checkout" className="btn btn-primary">
+            Checkout
+          </Link>
+        </div>
       </div>
     </div>
   )

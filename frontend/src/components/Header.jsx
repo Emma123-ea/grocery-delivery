@@ -18,6 +18,9 @@ export default function Header() {
           </Link>
           {user ? (
             <>
+              <Link to="/orders" className="nav-link">
+                My orders
+              </Link>
               <span className="nav-user">{user.name}</span>
               <button type="button" className="btn btn-secondary" onClick={logout}>
                 Log out
