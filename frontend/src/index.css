@@ -575,3 +575,76 @@ h1 {
 .branch-form .field {
   width: 200px;
 }
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  width: 100%;
+  flex: 1 0 auto;
+}
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.site-footer-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 20px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.site-footer-inner p {
+  margin: 0;
+}
+
+.footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.footer-nav a {
+  color: var(--muted);
+}
+
+.footer-nav a:hover {
+  color: var(--accent);
+}
+
+.legal {
+  max-width: 720px;
+}
+
+.legal h2 {
+  margin: 28px 0 8px;
+  font-size: 1.25rem;
+}
+
+.legal p,
+.legal li {
+  color: var(--text);
+}
+
+.legal ul {
+  padding-left: 20px;
+}
+
+.legal li {
+  margin-bottom: 6px;
+}
+
+.legal-date {
+  margin: 4px 0 0;
+  color: var(--muted);
+}

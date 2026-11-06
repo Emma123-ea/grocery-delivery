@@ -69,6 +69,10 @@ export default function Register() {
             required
           />
         </label>
+                <p className="order-meta">
+          By creating an account you agree to our <Link to="/terms">terms</Link> and{' '}
+          <Link to="/privacy">privacy policy</Link>.
+        </p>
         {error && <p className="message error">{error}</p>}
         <button type="submit" className="btn btn-primary" disabled={submitting}>
           {submitting ? 'Creating account...' : 'Create account'}
