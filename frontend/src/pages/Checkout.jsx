@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../useAuth'
 import { useCart } from '../useCart'
+import { apiRequest } from '../api'
 import { formatPrice } from '../formatPrice'
 
 export default function Checkout() {
@@ -13,9 +14,14 @@ export default function Checkout() {
   const [notes, setNotes] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [redirecting, setRedirecting] = useState(false)
 
   if (!user) {
     return <Navigate to="/login" state={{ from: '/checkout' }} replace />
+  }
+
+  if (redirecting) {
+    return <p className="message">Taking you to the payment page...</p>
   }
 
   if (items.length === 0) {
@@ -34,35 +40,41 @@ export default function Checkout() {
     e.preventDefault()
     setError('')
     setSubmitting(true)
+
+    let order
     try {
-      const res = await fetch('/api/orders', {
+      order = await apiRequest('/api/orders', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
+        token,
+        body: {
           items: items.map((i) => ({ product_id: i.id, quantity: i.quantity })),
           delivery_address: address,
           delivery_phone: phone,
           notes,
-        }),
+        },
       })
-      const data = await res.json().catch(() => ({}))
-
-      if (res.status === 401) {
+    } catch (err) {
+      if (err.status === 401) {
         logout()
         return
       }
-      if (!res.ok) {
-        throw new Error(data.error || 'Could not place your order. Please try again.')
-      }
-
-      clearCart()
-      navigate('/orders', { state: { placedId: data.id } })
-    } catch (err) {
       setError(err.message)
       setSubmitting(false)
+      return
+    }
+
+    setRedirecting(true)
+    clearCart()
+
+    try {
+      const payment = await apiRequest('/api/payments/initialize', {
+        method: 'POST',
+        token,
+        body: { order_id: order.id },
+      })
+      window.location.assign(payment.authorization_url)
+    } catch {
+      navigate('/orders', { state: { placedId: order.id, payError: true } })
     }
   }
 
@@ -101,9 +113,10 @@ export default function Checkout() {
               maxLength={500}
             />
           </label>
+          <p className="order-meta">You will be taken to Paystack to pay.</p>
           {error && <p className="message error">{error}</p>}
           <button type="submit" className="btn btn-primary" disabled={submitting}>
-            {submitting ? 'Placing order...' : `Place order (${formatPrice(totalPesewas)})`}
+            {submitting ? 'Placing order...' : `Place order and pay (${formatPrice(totalPesewas)})`}
           </button>
         </form>
 

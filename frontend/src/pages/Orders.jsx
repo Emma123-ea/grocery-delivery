@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../useAuth'
+import { apiRequest } from '../api'
 import { formatPrice } from '../formatPrice'
 
 function label(value) {
-  return value.charAt(0).toUpperCase() + value.slice(1)
+  const text = value.replace(/_/g, ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 function formatDate(stamp) {
@@ -16,31 +18,50 @@ export default function Orders() {
   const { user, token, logout } = useAuth()
   const location = useLocation()
   const placedId = location.state && location.state.placedId
+  const payError = location.state && location.state.payError
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [payingId, setPayingId] = useState(null)
+  const [payErrors, setPayErrors] = useState({})
 
   useEffect(() => {
     if (!token) return
 
-    fetch('/api/orders', { headers: { Authorization: `Bearer ${token}` } })
-      .then((res) => {
-        if (res.status === 401) {
-          logout()
-          return null
-        }
-        if (!res.ok) throw new Error('Could not load your orders')
-        return res.json()
-      })
+    apiRequest('/api/orders', { token })
       .then((data) => {
-        if (data) setOrders(data)
+        setOrders(data)
         setLoading(false)
       })
       .catch((err) => {
+        if (err.status === 401) {
+          logout()
+          return
+        }
         setError(err.message)
         setLoading(false)
       })
   }, [token, logout])
+
+  async function handlePay(orderId) {
+    setPayErrors((prev) => ({ ...prev, [orderId]: '' }))
+    setPayingId(orderId)
+    try {
+      const data = await apiRequest('/api/payments/initialize', {
+        method: 'POST',
+        token,
+        body: { order_id: orderId },
+      })
+      window.location.assign(data.authorization_url)
+    } catch (err) {
+      if (err.status === 401) {
+        logout()
+        return
+      }
+      setPayErrors((prev) => ({ ...prev, [orderId]: err.message }))
+      setPayingId(null)
+    }
+  }
 
   if (!user) {
     return <Navigate to="/login" state={{ from: '/orders' }} replace />
@@ -50,7 +71,12 @@ export default function Orders() {
     <div>
       <h1>My orders</h1>
 
-      {placedId && <p className="banner">Order #{placedId} was placed.</p>}
+      {placedId && !payError && <p className="banner">Order #{placedId} was placed.</p>}
+      {placedId && payError && (
+        <p className="banner">
+          Order #{placedId} was placed, but the payment could not be started. Use Pay now below.
+        </p>
+      )}
       {error && <p className="message error">{error}</p>}
       {loading && !error && <p className="message">Loading your orders...</p>}
       {!loading && !error && orders.length === 0 && (
@@ -83,6 +109,20 @@ export default function Orders() {
 
             <p className="order-meta">Deliver to: {o.delivery_address}</p>
             <p className="cart-total">Total: {formatPrice(o.total_pesewas)}</p>
+
+            {o.payment_status === 'unpaid' && o.status !== 'cancelled' && (
+              <div className="order-actions">
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={payingId === o.id}
+                  onClick={() => handlePay(o.id)}
+                >
+                  {payingId === o.id ? 'Please wait...' : 'Pay now'}
+                </button>
+              </div>
+            )}
+            {payErrors[o.id] && <p className="message error">{payErrors[o.id]}</p>}
           </li>
         ))}
       </ul>

@@ -63,6 +63,16 @@ db.exec(`
     FOREIGN KEY (order_id) REFERENCES orders(id),
     FOREIGN KEY (product_id) REFERENCES products(id)
   );
+
+  CREATE TABLE IF NOT EXISTS payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    reference TEXT NOT NULL UNIQUE,
+    amount_pesewas INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'initiated',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (order_id) REFERENCES orders(id)
+  );
 `);
 
 module.exports = db;
