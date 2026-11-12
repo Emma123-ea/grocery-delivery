@@ -1,5 +1,5 @@
 const express = require('express');
-const db = require('../db');
+const { query, withTransaction } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -15,7 +15,26 @@ class OrderError extends Error {
   }
 }
 
-router.post('/', requireAuth, (req, res) => {
+async function withItems(orders) {
+  if (orders.length === 0) return [];
+
+  const ids = orders.map((o) => o.id);
+  const items = await query(
+    `SELECT order_id, product_id, product_name, unit_price_pesewas, quantity, line_total_pesewas
+     FROM order_items WHERE order_id = ANY($1::int[]) ORDER BY id`,
+    [ids]
+  );
+
+  const byOrder = new Map();
+  for (const item of items.rows) {
+    if (!byOrder.has(item.order_id)) byOrder.set(item.order_id, []);
+    byOrder.get(item.order_id).push(item);
+  }
+
+  return orders.map((o) => ({ ...o, items: byOrder.get(o.id) || [] }));
+}
+
+router.post('/', requireAuth, async (req, res) => {
   const { items, delivery_address, delivery_phone, notes } = req.body || {};
 
   if (!Array.isArray(items) || items.length === 0) {
@@ -51,83 +70,77 @@ router.post('/', requireAuth, (req, res) => {
     return res.status(400).json({ error: 'Too many different items in one order' });
   }
 
+  const productIds = [...wanted.keys()].sort((a, b) => a - b);
+
   try {
-    db.exec('BEGIN');
+    const result = await withTransaction(async (client) => {
+      const lines = [];
+      let branchId = null;
 
-    const findProduct = db.prepare(
-      'SELECT id, branch_id, name, price_pesewas, stock_quantity, is_available FROM products WHERE id = ?'
-    );
-
-    const lines = [];
-    let branchId = null;
-
-    for (const [productId, quantity] of wanted) {
-      const product = findProduct.get(productId);
-
-      if (!product || !product.is_available) {
-        throw new OrderError(
-          409,
-          'One of the items in your cart is no longer available. Remove it and try again.'
+      for (const productId of productIds) {
+        const quantity = wanted.get(productId);
+        const found = await client.query(
+          `SELECT id, branch_id, name, price_pesewas, stock_quantity, is_available
+           FROM products WHERE id = $1`,
+          [productId]
         );
-      }
-      if (branchId === null) {
-        branchId = product.branch_id;
-      } else if (branchId !== product.branch_id) {
-        throw new OrderError(400, 'All items in an order must come from the same branch');
-      }
-      if (product.stock_quantity < quantity) {
-        throw new OrderError(
-          409,
-          product.stock_quantity === 0
-            ? `${product.name} is out of stock`
-            : `Only ${product.stock_quantity} of ${product.name} available`
-        );
+        const product = found.rows[0];
+
+        if (!product || !product.is_available) {
+          throw new OrderError(
+            409,
+            'One of the items in your cart is no longer available. Remove it and try again.'
+          );
+        }
+        if (branchId === null) {
+          branchId = product.branch_id;
+        } else if (branchId !== product.branch_id) {
+          throw new OrderError(400, 'All items in an order must come from the same branch');
+        }
+        if (product.stock_quantity < quantity) {
+          throw new OrderError(
+            409,
+            product.stock_quantity === 0
+              ? `${product.name} is out of stock`
+              : `Only ${product.stock_quantity} of ${product.name} available`
+          );
+        }
+
+        lines.push({ product, quantity });
       }
 
-      lines.push({ product, quantity });
-    }
+      const total = lines.reduce((sum, l) => sum + l.product.price_pesewas * l.quantity, 0);
 
-    const total = lines.reduce((sum, l) => sum + l.product.price_pesewas * l.quantity, 0);
-
-    const orderResult = db
-      .prepare(
+      const inserted = await client.query(
         `INSERT INTO orders (user_id, branch_id, delivery_address, delivery_phone, notes, total_pesewas)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(req.user.id, branchId, address, phone, cleanNotes, total);
-    const orderId = Number(orderResult.lastInsertRowid);
-
-    const insertItem = db.prepare(
-      `INSERT INTO order_items (order_id, product_id, product_name, unit_price_pesewas, quantity, line_total_pesewas)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    );
-    const reduceStock = db.prepare(
-      'UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND stock_quantity >= ?'
-    );
-
-    for (const { product, quantity } of lines) {
-      insertItem.run(
-        orderId,
-        product.id,
-        product.name,
-        product.price_pesewas,
-        quantity,
-        product.price_pesewas * quantity
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [req.user.id, branchId, address, phone, cleanNotes, total]
       );
-      const updated = reduceStock.run(quantity, product.id, quantity);
-      if (Number(updated.changes) !== 1) {
-        throw new OrderError(409, `${product.name} just ran out of stock`);
-      }
-    }
+      const orderId = inserted.rows[0].id;
 
-    db.exec('COMMIT');
-    res.status(201).json({ id: orderId, total_pesewas: total, status: 'pending' });
+      for (const { product, quantity } of lines) {
+        await client.query(
+          `INSERT INTO order_items
+             (order_id, product_id, product_name, unit_price_pesewas, quantity, line_total_pesewas)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [orderId, product.id, product.name, product.price_pesewas, quantity, product.price_pesewas * quantity]
+        );
+
+        const updated = await client.query(
+          `UPDATE products SET stock_quantity = stock_quantity - $1
+           WHERE id = $2 AND stock_quantity >= $1`,
+          [quantity, product.id]
+        );
+        if (updated.rowCount !== 1) {
+          throw new OrderError(409, `${product.name} just ran out of stock`);
+        }
+      }
+
+      return { id: orderId, total_pesewas: total, status: 'pending' };
+    });
+
+    res.status(201).json(result);
   } catch (err) {
-    try {
-      db.exec('ROLLBACK');
-    } catch {
-      /* no open transaction to roll back */
-    }
     if (err instanceof OrderError) {
       return res.status(err.status).json({ error: err.message });
     }
@@ -136,24 +149,22 @@ router.post('/', requireAuth, (req, res) => {
   }
 });
 
-router.get('/', requireAuth, (req, res) => {
-  const orders = db
-    .prepare(
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    const orders = await query(
       `SELECT o.id, o.status, o.payment_status, o.total_pesewas, o.delivery_address,
               o.delivery_phone, o.notes, o.created_at, b.name AS branch_name
        FROM orders o
        JOIN branches b ON b.id = o.branch_id
-       WHERE o.user_id = ?
-       ORDER BY o.id DESC`
-    )
-    .all(req.user.id);
-
-  const findItems = db.prepare(
-    `SELECT product_id, product_name, unit_price_pesewas, quantity, line_total_pesewas
-     FROM order_items WHERE order_id = ? ORDER BY id`
-  );
-
-  res.json(orders.map((o) => ({ ...o, items: findItems.all(o.id) })));
+       WHERE o.user_id = $1
+       ORDER BY o.id DESC`,
+      [req.user.id]
+    );
+    res.json(await withItems(orders.rows));
+  } catch (err) {
+    console.error('Loading orders failed:', err);
+    res.status(500).json({ error: 'Could not load your orders' });
+  }
 });
 
 module.exports = router;

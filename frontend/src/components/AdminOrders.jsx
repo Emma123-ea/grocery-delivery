@@ -17,7 +17,7 @@ function capitalize(value) {
 }
 
 function formatDate(stamp) {
-  const date = new Date(`${stamp.replace(' ', 'T')}Z`)
+  const date = new Date(stamp)
   return date.toLocaleString('en-GH', { dateStyle: 'medium', timeStyle: 'short' })
 }
 

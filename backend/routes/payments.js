@@ -1,6 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
-const db = require('../db');
+const { query, withTransaction } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
 const router = express.Router();
@@ -28,16 +28,13 @@ async function paystackRequest(path, options = {}) {
   return data.data;
 }
 
-function markPaid(payment) {
-  db.exec('BEGIN');
-  try {
-    db.prepare("UPDATE orders SET payment_status = 'paid' WHERE id = ?").run(payment.order_id);
-    db.prepare("UPDATE payments SET status = 'success' WHERE id = ?").run(payment.id);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+async function markPaid(payment) {
+  await withTransaction(async (client) => {
+    await client.query("UPDATE orders SET payment_status = 'paid' WHERE id = $1", [
+      payment.order_id,
+    ]);
+    await client.query("UPDATE payments SET status = 'success' WHERE id = $1", [payment.id]);
+  });
 }
 
 // Asks Paystack what happened to a payment and updates the order if it was paid.
@@ -52,7 +49,7 @@ async function checkWithPaystack(payment) {
       console.error('Payment amount mismatch for', payment.reference);
       return 'mismatch';
     }
-    markPaid(payment);
+    await markPaid(payment);
     return 'paid';
   }
 
@@ -73,108 +70,117 @@ router.post('/initialize', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'Invalid order' });
   }
 
-  const order = db
-    .prepare(
-      'SELECT id, status, payment_status, total_pesewas FROM orders WHERE id = ? AND user_id = ?'
-    )
-    .get(orderId, req.user.id);
-
-  if (!order) {
-    return res.status(404).json({ error: 'Order not found' });
-  }
-  if (order.payment_status === 'paid') {
-    return res.status(409).json({ error: 'This order has already been paid for' });
-  }
-  if (order.status === 'cancelled') {
-    return res.status(409).json({ error: 'This order was cancelled' });
-  }
-
-  const user = db.prepare('SELECT email FROM users WHERE id = ?').get(req.user.id);
-  if (!user) {
-    return res.status(401).json({ error: 'Login required' });
-  }
-
-  // If an earlier attempt was actually paid, settle it instead of charging twice.
-  const earlier = db
-    .prepare(
-      `SELECT id, order_id, reference, amount_pesewas FROM payments
-       WHERE order_id = ? AND status = 'initiated' ORDER BY id DESC LIMIT 5`
-    )
-    .all(order.id);
-
   try {
-    for (const payment of earlier) {
-      const outcome = await checkWithPaystack(payment);
-      if (outcome === 'paid') {
-        return res.status(409).json({ error: 'This order has already been paid for' });
-      }
+    const found = await query(
+      'SELECT id, status, payment_status, total_pesewas FROM orders WHERE id = $1 AND user_id = $2',
+      [orderId, req.user.id]
+    );
+    const order = found.rows[0];
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
     }
-  } catch (err) {
-    console.error('Checking earlier payment failed:', err.message);
-    return res
-      .status(502)
-      .json({ error: 'Could not check your earlier payment. Please try again.' });
-  }
+    if (order.payment_status === 'paid') {
+      return res.status(409).json({ error: 'This order has already been paid for' });
+    }
+    if (order.status === 'cancelled') {
+      return res.status(409).json({ error: 'This order was cancelled' });
+    }
 
-  const reference = `order-${order.id}-${crypto.randomBytes(6).toString('hex')}`;
-  const frontend = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const userResult = await query('SELECT email FROM users WHERE id = $1', [req.user.id]);
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(401).json({ error: 'Login required' });
+    }
 
-  try {
-    const data = await paystackRequest('/transaction/initialize', {
-      method: 'POST',
-      body: JSON.stringify({
-        email: user.email,
-        amount: order.total_pesewas,
-        currency: 'GHS',
-        reference,
-        callback_url: `${frontend}/payment/callback`,
-        metadata: { order_id: order.id },
-      }),
-    });
-
-    db.prepare('INSERT INTO payments (order_id, reference, amount_pesewas) VALUES (?, ?, ?)').run(
-      order.id,
-      reference,
-      order.total_pesewas
+    // If an earlier attempt was actually paid, settle it instead of charging twice.
+    const earlier = await query(
+      `SELECT id, order_id, reference, amount_pesewas FROM payments
+       WHERE order_id = $1 AND status = 'initiated' ORDER BY id DESC LIMIT 5`,
+      [order.id]
     );
 
-    res.json({ authorization_url: data.authorization_url, reference });
+    try {
+      for (const payment of earlier.rows) {
+        const outcome = await checkWithPaystack(payment);
+        if (outcome === 'paid') {
+          return res.status(409).json({ error: 'This order has already been paid for' });
+        }
+      }
+    } catch (err) {
+      console.error('Checking earlier payment failed:', err.message);
+      return res
+        .status(502)
+        .json({ error: 'Could not check your earlier payment. Please try again.' });
+    }
+
+    const reference = `order-${order.id}-${crypto.randomBytes(6).toString('hex')}`;
+    const frontend = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+    try {
+      const data = await paystackRequest('/transaction/initialize', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: user.email,
+          amount: order.total_pesewas,
+          currency: 'GHS',
+          reference,
+          callback_url: `${frontend}/payment/callback`,
+          metadata: { order_id: order.id },
+        }),
+      });
+
+      await query(
+        'INSERT INTO payments (order_id, reference, amount_pesewas) VALUES ($1, $2, $3)',
+        [order.id, reference, order.total_pesewas]
+      );
+
+      res.json({ authorization_url: data.authorization_url, reference });
+    } catch (err) {
+      console.error('Paystack initialize failed:', err.message);
+      res.status(502).json({ error: 'Could not start the payment. Please try again.' });
+    }
   } catch (err) {
-    console.error('Paystack initialize failed:', err.message);
-    res.status(502).json({ error: 'Could not start the payment. Please try again.' });
+    console.error('Starting payment failed:', err);
+    res.status(500).json({ error: 'Could not start the payment. Please try again.' });
   }
 });
 
 router.get('/verify/:reference', requireAuth, async (req, res) => {
   const reference = String(req.params.reference || '');
 
-  const payment = db
-    .prepare(
+  try {
+    const found = await query(
       `SELECT p.id, p.order_id, p.reference, p.amount_pesewas, o.user_id, o.payment_status
        FROM payments p
        JOIN orders o ON o.id = p.order_id
-       WHERE p.reference = ?`
-    )
-    .get(reference);
+       WHERE p.reference = $1`,
+      [reference]
+    );
+    const payment = found.rows[0];
 
-  if (!payment || payment.user_id !== req.user.id) {
-    return res.status(404).json({ error: 'Payment not found' });
-  }
-  if (payment.payment_status === 'paid') {
-    return res.json({ order_id: payment.order_id, status: 'paid' });
-  }
-
-  try {
-    const outcome = await checkWithPaystack(payment);
-    if (outcome === 'mismatch') {
-      return res
-        .status(409)
-        .json({ error: 'The payment amount did not match this order. Please contact us.' });
+    if (!payment || payment.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Payment not found' });
     }
-    res.json({ order_id: payment.order_id, status: outcome });
+    if (payment.payment_status === 'paid') {
+      return res.json({ order_id: payment.order_id, status: 'paid' });
+    }
+
+    try {
+      const outcome = await checkWithPaystack(payment);
+      if (outcome === 'mismatch') {
+        return res
+          .status(409)
+          .json({ error: 'The payment amount did not match this order. Please contact us.' });
+      }
+      res.json({ order_id: payment.order_id, status: outcome });
+    } catch (err) {
+      console.error('Paystack verify failed:', err.message);
+      res.status(502).json({ error: 'Could not confirm your payment yet. Please try again.' });
+    }
   } catch (err) {
-    console.error('Paystack verify failed:', err.message);
-    res.status(502).json({ error: 'Could not confirm your payment yet. Please try again.' });
+    console.error('Verifying payment failed:', err);
+    res.status(500).json({ error: 'Could not confirm your payment yet. Please try again.' });
   }
 });
 

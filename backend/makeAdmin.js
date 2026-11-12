@@ -1,10 +1,19 @@
-const db = require('./db');
+const { query, pool } = require('./db');
 
-const email = (process.argv[2] || '').trim().toLowerCase();
-if (!email) {
-  console.log('Usage: node makeAdmin.js user@example.com');
-  process.exit(1);
+async function main() {
+  const email = (process.argv[2] || '').trim().toLowerCase();
+  if (!email) {
+    console.log('Usage: node makeAdmin.js user@example.com');
+    return;
+  }
+
+  const result = await query("UPDATE users SET role = 'admin' WHERE email = $1", [email]);
+  console.log(result.rowCount ? `${email} is now an admin` : 'No user with that email');
 }
 
-const result = db.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(email);
-console.log(result.changes ? `${email} is now an admin` : 'No user with that email');
+main()
+  .catch((err) => {
+    console.error(err.message);
+    process.exitCode = 1;
+  })
+  .finally(() => pool.end());
